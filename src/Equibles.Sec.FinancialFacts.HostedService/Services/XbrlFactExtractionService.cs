@@ -11,12 +11,14 @@ using Equibles.Sec.FinancialFacts.BusinessLogic.Models;
 using Equibles.Sec.FinancialFacts.BusinessLogic.Parsers;
 using Equibles.Sec.FinancialFacts.Data.Enums;
 using Equibles.Sec.FinancialFacts.Data.Models;
+using Equibles.Sec.FinancialFacts.HostedService.Configuration;
 using Equibles.Sec.FinancialFacts.Repositories;
 using Equibles.Worker;
 using FlexLabs.EntityFrameworkCore.Upsert;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Equibles.Sec.FinancialFacts.HostedService.Services;
 
@@ -67,7 +69,6 @@ public class XbrlFactExtractionService
     // Version 7 replays derived fiscal identities for interim instants and existing rows.
     public const int CurrentVersion = 8;
 
-    private const int InsertBatchSize = 1000;
 
     /// <summary>
     /// Envelopes above this uncompressed size are skipped instead of parsed.
@@ -101,6 +102,7 @@ public class XbrlFactExtractionService
     private readonly StandaloneXbrlParser _standaloneParser;
     private readonly IFileManager _fileManager;
     private readonly FiscalCalendarEvidenceReader _calendarReader;
+    private readonly int _insertBatchSize;
     private readonly ILogger<XbrlFactExtractionService> _logger;
 
     public XbrlFactExtractionService(
@@ -109,7 +111,8 @@ public class XbrlFactExtractionService
         StandaloneXbrlParser standaloneParser,
         IFileManager fileManager,
         ILogger<XbrlFactExtractionService> logger,
-        FiscalCalendarEvidenceReader calendarReader = null
+        FiscalCalendarEvidenceReader calendarReader = null,
+        IOptions<FinancialFactsPersistenceOptions> persistenceOptions = null
     )
     {
         _scopeFactory = scopeFactory;
@@ -117,6 +120,9 @@ public class XbrlFactExtractionService
         _standaloneParser = standaloneParser;
         _fileManager = fileManager;
         _calendarReader = calendarReader;
+        _insertBatchSize = (
+            persistenceOptions?.Value ?? new FinancialFactsPersistenceOptions()
+        ).EffectiveInsertBatchSize;
         _logger = logger;
     }
 
@@ -248,7 +254,7 @@ public class XbrlFactExtractionService
             dimensionsByKey.TryAdd(candidate.DimensionsKey, candidate.Fact.Dimensions);
         }
 
-        await BatchPersister.Persist(facts, InsertBatchSize, items => FlushFacts(items, false));
+        await BatchPersister.Persist(facts, _insertBatchSize, items => FlushFacts(items, false));
         foreach (
             var group in consolidatedFills.GroupBy(fact =>
                 calendar.Resolve(fact.PeriodStart, fact.PeriodEnd) != null
@@ -257,7 +263,7 @@ public class XbrlFactExtractionService
         {
             await BatchPersister.Persist(
                 group.ToList(),
-                InsertBatchSize,
+                _insertBatchSize,
                 items => FlushFacts(items, true, refreshFiscalIdentity: group.Key)
             );
         }
@@ -845,7 +851,7 @@ public class XbrlFactExtractionService
         if (rows.Count == 0)
             return;
 
-        foreach (var batch in rows.Chunk(InsertBatchSize))
+        foreach (var batch in rows.Chunk(_insertBatchSize))
         {
             await dbContext
                 .Set<FinancialFactDimension>()

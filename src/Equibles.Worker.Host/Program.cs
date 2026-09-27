@@ -105,6 +105,9 @@ builder.Services.Configure<FinancialFactsScraperOptions>(
 builder.Services.Configure<Equibles.Sec.FinancialFacts.HostedService.Configuration.ConceptMetadataOptions>(
     builder.Configuration.GetSection("ConceptMetadata")
 );
+builder.Services.Configure<Equibles.Sec.FinancialFacts.HostedService.Configuration.FinancialFactsPersistenceOptions>(
+    builder.Configuration.GetSection("FinancialFactsPersistence")
+);
 builder.Services.Configure<Equibles.Sec.FinancialFacts.HostedService.Configuration.XbrlFactsExtractionOptions>(
     builder.Configuration.GetSection("XbrlFactsExtraction")
 );

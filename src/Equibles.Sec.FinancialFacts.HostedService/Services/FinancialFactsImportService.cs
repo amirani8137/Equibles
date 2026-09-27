@@ -12,6 +12,7 @@ using Equibles.Sec.FinancialFacts.BusinessLogic;
 using Equibles.Sec.FinancialFacts.Data;
 using Equibles.Sec.FinancialFacts.Data.Enums;
 using Equibles.Sec.FinancialFacts.Data.Models;
+using Equibles.Sec.FinancialFacts.HostedService.Configuration;
 using Equibles.Sec.FinancialFacts.Repositories;
 using Equibles.Sec.Repositories;
 using Equibles.Worker;
@@ -19,6 +20,7 @@ using FlexLabs.EntityFrameworkCore.Upsert;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Equibles.Sec.FinancialFacts.HostedService.Services;
 
@@ -31,7 +33,6 @@ namespace Equibles.Sec.FinancialFacts.HostedService.Services;
 [Service]
 public class FinancialFactsImportService
 {
-    private const int InsertBatchSize = 1000;
 
     // Bump whenever parsing, fiscal identity, or quality filtering changes existing rows. The
     // per-company checkpoint forces a full Company Facts replay without racing the old worker
@@ -43,13 +44,15 @@ public class FinancialFactsImportService
     private readonly ILogger<FinancialFactsImportService> _logger;
     private readonly ErrorReporter _errorReporter;
     private readonly FiscalCalendarEvidenceReader _calendarReader;
+    private readonly int _insertBatchSize;
 
     public FinancialFactsImportService(
         IServiceScopeFactory scopeFactory,
         ISecEdgarClient secEdgarClient,
         ILogger<FinancialFactsImportService> logger,
         ErrorReporter errorReporter,
-        FiscalCalendarEvidenceReader calendarReader = null
+        FiscalCalendarEvidenceReader calendarReader = null,
+        IOptions<FinancialFactsPersistenceOptions> persistenceOptions = null
     )
     {
         _scopeFactory = scopeFactory;
@@ -57,6 +60,9 @@ public class FinancialFactsImportService
         _logger = logger;
         _errorReporter = errorReporter;
         _calendarReader = calendarReader;
+        _insertBatchSize = (
+            persistenceOptions?.Value ?? new FinancialFactsPersistenceOptions()
+        ).EffectiveInsertBatchSize;
     }
 
     public async Task Import(EquityIssuer stock, CancellationToken cancellationToken)
@@ -332,7 +338,7 @@ public class FinancialFactsImportService
         // SyncStatus is advanced only here, after a successful persist, so a
         // failure leaves the checkpoint un-advanced and the company is
         // retried in full next cycle.
-        await BatchPersister.Persist(facts, InsertBatchSize, FlushFacts);
+        await BatchPersister.Persist(facts, _insertBatchSize, FlushFacts);
         await UpsertSyncStatus(stock, maxFiled, calendarFingerprint, cancellationToken);
 
         _logger.LogInformation(

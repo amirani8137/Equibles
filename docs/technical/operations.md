@@ -55,6 +55,7 @@ Each scraper has its own option section. All scraper option binds live in [`src/
 | `FredScraper` | FRED worker cadence + series-list filtering. |
 | `FtdScraper` | SEC Fails-To-Deliver worker cadence. |
 | `FinancialFactsScraper` | XBRL fact ingestion cadence. |
+| `FinancialFactsPersistence` | `InsertBatchSize` (default `1000`): rows per `FinancialFact` upsert for both the Company Facts importer and the dimensional-fact extractor. Peak memory scales with it; lower it (e.g. `FinancialFactsPersistence__InsertBatchSize=250`) on memory-constrained hosts. |
 | `YahooPriceScraper` | Yahoo price worker cadence + per-ticker backoff. |
 | `CftcScraper` | CFTC COT worker cadence + contract subset. |
 | `CboeScraper` | CBOE worker cadence. |
