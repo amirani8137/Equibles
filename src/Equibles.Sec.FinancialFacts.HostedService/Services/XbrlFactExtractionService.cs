@@ -69,7 +69,6 @@ public class XbrlFactExtractionService
     // Version 7 replays derived fiscal identities for interim instants and existing rows.
     public const int CurrentVersion = 8;
 
-
     /// <summary>
     /// Envelopes above this uncompressed size are skipped instead of parsed.
     /// The parsers materialise the whole document in memory (the DOM costs a

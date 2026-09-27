@@ -33,7 +33,6 @@ namespace Equibles.Sec.FinancialFacts.HostedService.Services;
 [Service]
 public class FinancialFactsImportService
 {
-
     // Bump whenever parsing, fiscal identity, or quality filtering changes existing rows. The
     // per-company checkpoint forces a full Company Facts replay without racing the old worker
     // during an additive migration rollout.

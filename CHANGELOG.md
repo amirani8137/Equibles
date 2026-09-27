@@ -21,6 +21,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - `CommonStockRepository.Search` accepts an `includeInactive` flag so operator surfaces can audit retained delisted identities; reader-facing surfaces keep the active-only default.
 - `ListFilings` provides company-scoped or market-wide filing discovery with date, document-type, exact 8-K item-number, and paging filters.
 - `GetDividendHistory` returns stored cash-dividend history newest first with date and paging controls.
+- `FinancialFactsPersistence:InsertBatchSize` (default `1000`) sets the rows per `FinancialFact` upsert for both `FinancialFactsImportService` and `XbrlFactExtractionService`, so memory-constrained hosts can bound peak memory (`FinancialFactsPersistence__InsertBatchSize=250`); a non-positive value falls back to the default (#4580).
 
 ### Changed
 
