@@ -5,12 +5,14 @@ using Equibles.Integrations.Sec.Contracts;
 using Equibles.Integrations.Sec.Models.Responses;
 using Equibles.IntegrationTests.Helpers;
 using Equibles.Sec.FinancialFacts.Data.Models;
+using Equibles.Sec.FinancialFacts.HostedService.Configuration;
 using Equibles.Sec.FinancialFacts.HostedService.Services;
 using Equibles.Sec.FinancialFacts.Repositories;
 using Equibles.Sec.Repositories;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using NSubstitute;
 using Xunit;
 
@@ -33,6 +35,7 @@ public class FinancialFactsImportServiceDedupTests : IAsyncLifetime
 {
     private readonly ParadeDbFixture _fixture;
     private readonly List<EquiblesFinancialDbContext> _contexts = [];
+    private readonly FinancialFactBatchInterceptor _batches = new();
 
     public FinancialFactsImportServiceDedupTests(ParadeDbFixture fixture) => _fixture = fixture;
 
@@ -47,7 +50,7 @@ public class FinancialFactsImportServiceDedupTests : IAsyncLifetime
 
     private EquiblesFinancialDbContext FreshContext()
     {
-        var ctx = _fixture.CreateDbContext();
+        var ctx = _fixture.CreateDbContext(options => options.AddInterceptors(_batches));
         _contexts.Add(ctx);
         return ctx;
     }
@@ -167,5 +170,89 @@ public class FinancialFactsImportServiceDedupTests : IAsyncLifetime
                 Arg.Any<string>(),
                 Arg.Any<string>()
             );
+    }
+
+    [Theory]
+    [InlineData(null, new[] { 3 })]
+    [InlineData(1, new[] { 1, 1, 1 })]
+    [InlineData(2, new[] { 2, 1 })]
+    [InlineData(0, new[] { 3 })]
+    [InlineData(-5, new[] { 3 })]
+    public async Task Import_ConfiguredBatchSize_PersistsEveryFactBeforeAdvancingCheckpoint(
+        int? batchSize,
+        int[] expectedBatches
+    )
+    {
+        var issuer = Equibles.TestSupport.EquityIssuerSeed.Create(
+            Id: Guid.NewGuid(),
+            Ticker: "AAPL",
+            Name: "Apple Inc.",
+            Cik: "0000320193"
+        );
+        await using (var seed = _fixture.CreateDbContext())
+        {
+            seed.Add(issuer);
+            await seed.SaveChangesAsync();
+        }
+        var values = Enumerable
+            .Range(2021, 3)
+            .Select(year => new CompanyFactValue
+            {
+                Start = new DateOnly(year, 1, 1),
+                End = new DateOnly(year, 12, 31),
+                Val = year,
+                Accn = $"0000320193-{year % 100:00}-000001",
+                Fy = year,
+                Fp = "FY",
+                Form = "10-K",
+                Filed = new DateOnly(year + 1, 2, 1),
+            })
+            .ToList();
+        var client = Substitute.For<ISecEdgarClient>();
+        client
+            .GetCompanyFacts(issuer.Cik)
+            .Returns(
+                new CompanyFactsResponse
+                {
+                    Cik = 320193,
+                    Facts = new()
+                    {
+                        ["us-gaap"] = new()
+                        {
+                            ["Revenues"] = new CompanyFactConcept
+                            {
+                                Label = "Revenues",
+                                Units = new() { ["USD"] = values },
+                            },
+                        },
+                    },
+                }
+            );
+        var scopeFactory = CreateScopeFactory();
+        var reporter = Substitute.For<ErrorReporter>(
+            Substitute.For<IServiceScopeFactory>(),
+            Substitute.For<ILogger<ErrorReporter>>()
+        );
+        var sut = new FinancialFactsImportService(
+            scopeFactory,
+            client,
+            Substitute.For<ILogger<FinancialFactsImportService>>(),
+            reporter,
+            persistenceOptions: batchSize.HasValue
+                ? Options.Create(
+                    new FinancialFactsPersistenceOptions { InsertBatchSize = batchSize.Value }
+                )
+                : null
+        );
+
+        await sut.Import(issuer, CancellationToken.None);
+
+        _batches.FactBatchSizes.Should().Equal(expectedBatches);
+        await using var verify = _fixture.CreateDbContext();
+        (await verify.Set<FinancialFact>().OrderBy(f => f.Value).Select(f => f.Value).ToListAsync())
+            .Should()
+            .Equal(2021m, 2022m, 2023m);
+        var status = await verify.Set<FinancialFactsSyncStatus>().SingleAsync();
+        status.LastFiledDateSeen.Should().Be(new DateOnly(2024, 2, 1));
     }
 }

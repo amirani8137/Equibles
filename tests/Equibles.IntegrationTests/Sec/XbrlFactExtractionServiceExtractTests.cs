@@ -245,11 +245,16 @@ public class XbrlFactExtractionServiceExtractTests : ParadeDbMcpTestBase
         document.Issuer.FiscalYearEndMonth.Should().Be(6);
     }
 
-    private XbrlFactExtractionService BuildSut(bool historicalCalendar = false)
+    private XbrlFactExtractionService BuildSut(
+        bool historicalCalendar = false,
+        IOptions<FinancialFactsPersistenceOptions> persistenceOptions = null,
+        EquiblesFinancialDbContext context = null
+    )
     {
+        context ??= DbContext;
         var scopeFactory = ServiceScopeSubstitute.Create(
-            (typeof(EquiblesFinancialDbContext), DbContext),
-            (typeof(FinancialConceptRepository), new FinancialConceptRepository(DbContext))
+            (typeof(EquiblesFinancialDbContext), context),
+            (typeof(FinancialConceptRepository), new FinancialConceptRepository(context))
         );
         var fileManager = Substitute.For<IFileManager>();
         fileManager.GetContent(Arg.Any<File>()).Returns(ci => ((File)ci[0]).FileContent.Bytes);
@@ -265,8 +270,55 @@ public class XbrlFactExtractionServiceExtractTests : ParadeDbMcpTestBase
                     fileManager,
                     new InlineXbrlParser()
                 )
-                : null
+                : null,
+            persistenceOptions
         );
+    }
+
+    [Theory]
+    [InlineData(null, new[] { 3 })]
+    [InlineData(1, new[] { 1, 1, 1 })]
+    [InlineData(2, new[] { 2, 1 })]
+    [InlineData(0, new[] { 3 })]
+    [InlineData(-5, new[] { 3 })]
+    public async Task Extract_ConfiguredBatchSize_PersistsDimensionalAndConsolidatedFactsAndChildren(
+        int? batchSize,
+        int[] expectedBatches
+    )
+    {
+        const string tag = "RevenueFromContractWithCustomerExcludingAssessedTax";
+        var envelope = InlineEnvelope()
+            .Replace("scheme=\"cik\"", "scheme=\"http://www.sec.gov/CIK\"");
+        var bodyStart = envelope.IndexOf("<ix:nonFraction", StringComparison.Ordinal);
+        var facts = envelope[bodyStart..envelope.IndexOf("</body>", StringComparison.Ordinal)];
+        envelope = envelope.Replace(
+            "</body>",
+            facts.Replace(tag, "Revenues") + facts.Replace(tag, "NetIncomeLoss") + "</body>"
+        );
+        var document = await SeedDocument(envelope);
+        document.DocumentType = DocumentType.SixK;
+        await DbContext.SaveChangesAsync();
+        var batches = new FinancialFactBatchInterceptor();
+        await using var context = Fixture.CreateDbContext(options =>
+            options.AddInterceptors(batches)
+        );
+        var sut = BuildSut(
+            persistenceOptions: batchSize.HasValue
+                ? Options.Create(
+                    new FinancialFactsPersistenceOptions { InsertBatchSize = batchSize.Value }
+                )
+                : null,
+            context: context
+        );
+
+        (await sut.Extract(document, CancellationToken.None)).Should().Be(6);
+
+        batches.FactBatchSizes.Should().Equal(expectedBatches.Concat(expectedBatches));
+        batches.DimensionBatchSizes.Should().Equal(expectedBatches);
+        (await DbContext.Set<FinancialFact>().CountAsync(f => f.DocumentId == document.Id))
+            .Should()
+            .Be(6);
+        (await DbContext.Set<FinancialFactDimension>().CountAsync()).Should().Be(3);
     }
 
     [Fact]
